@@ -1,0 +1,11 @@
+{
+  "Version": 1,
+  "Hash": "VeM9zFupKfV3YghXCjREu1EgR1cKaPC3edSp1KBC9xo=",
+  "Source": "SkillSwapAPI",
+  "BasePath": "_content/SkillSwapAPI",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": []
+}

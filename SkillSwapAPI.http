@@ -1,0 +1,6 @@
+@SkillSwapAPI_HostAddress = http://localhost:5205
+
+GET {{SkillSwapAPI_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
