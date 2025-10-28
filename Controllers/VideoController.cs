@@ -5,31 +5,43 @@ using SkillSwapAPI.Services;
 
 namespace SkillSwapAPI.Controllers;
 
+/// <summary>
+/// Controller for handling Agora video call operations
+/// Manages token generation, session lifecycle, and recording functionality
+/// </summary>
 [ApiController]
 [Route("api/[controller]")]
-// [Authorize]
+// [Authorize] // TODO: Enable authorization once auth is fully implemented
 public class VideoController : ControllerBase
 {
     private readonly IAgoraService _agoraService;
     private readonly ILogger<VideoController> _logger;
 
+    // Constructor - DI injection for Agora service and logging
     public VideoController(IAgoraService agoraService, ILogger<VideoController> logger)
     {
         _agoraService = agoraService;
         _logger = logger;
     }
 
+    /// <summary>
+    /// Generates an Agora RTC token for a user to join a video channel
+    /// POST: api/video/generate-token
+    /// </summary>
     [HttpPost("generate-token")]
     public async Task<IActionResult> GenerateToken([FromBody] GenerateAgoraTokenRequest request)
     {
         try
         {
+            // Validate channel name
             if (string.IsNullOrEmpty(request.ChannelName))
                 return BadRequest(new { message = "Channel name is required" });
 
+            // Validate user ID - must be non-zero
             if (request.UserId == 0)
                 return BadRequest(new { message = "User ID is required" });
 
+            // Generate token via Agora service
             var result = await _agoraService.GenerateTokenAsync(request);
             _logger.LogInformation($"Generated token for user {request.UserId}");
             return Ok(result);
@@ -41,17 +53,23 @@ public class VideoController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Creates a new video call session
+    /// POST: api/video/create-session
+    /// </summary>
     [HttpPost("create-session")]
     public async Task<IActionResult> CreateSession([FromBody] CreateAgoraSessionRequest request)
     {
         try
         {
+            // Validate required fields
             if (string.IsNullOrEmpty(request.ChannelName))
                 return BadRequest(new { message = "Channel name is required" });
 
             if (string.IsNullOrEmpty(request.HostId))
                 return BadRequest(new { message = "Host ID is required" });
 
+            // Create session and return session details
             var result = await _agoraService.CreateSessionAsync(request);
             _logger.LogInformation($"Created session: {result.SessionId}");
             return Ok(result);
@@ -63,15 +81,22 @@ public class VideoController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Retrieves session details by session ID
+    /// GET: api/video/session/{sessionId}
+    /// </summary>
     [HttpGet("session/{sessionId}")]
     public async Task<IActionResult> GetSession(string sessionId)
     {
         try
         {
+            // Validate session ID parameter
             if (string.IsNullOrEmpty(sessionId))
                 return BadRequest(new { message = "Session ID is required" });
 
             var result = await _agoraService.GetSessionAsync(sessionId);
+            
+            // Return 404 if session doesn't exist
             if (result == null)
                 return NotFound(new { message = "Session not found" });
 
@@ -84,6 +109,10 @@ public class VideoController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Ends an active video session
+    /// POST: api/video/end-session
+    /// </summary>
     [HttpPost("end-session")]
     public async Task<IActionResult> EndSession([FromBody] EndSessionRequest request)
     {
@@ -93,6 +122,8 @@ public class VideoController : ControllerBase
                 return BadRequest(new { message = "Session ID is required" });
 
             var result = await _agoraService.EndSessionAsync(request.SessionId);
+            
+            // Check if session was successfully ended
             if (!result)
                 return BadRequest(new { message = "Failed to end session" });
 
@@ -106,17 +137,23 @@ public class VideoController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Starts cloud recording for a session
+    /// POST: api/video/start-recording
+    /// </summary>
     [HttpPost("start-recording")]
     public async Task<IActionResult> StartRecording([FromBody] StartRecordingRequest request)
     {
         try
         {
+            // Validate required parameters for recording
             if (string.IsNullOrEmpty(request.SessionId))
                 return BadRequest(new { message = "Session ID is required" });
 
             if (string.IsNullOrEmpty(request.ChannelName))
                 return BadRequest(new { message = "Channel name is required" });
 
+            // Initiate cloud recording via Agora
             var result = await _agoraService.StartRecordingAsync(request);
             _logger.LogInformation($"Started recording: {result.RecordingId}");
             return Ok(result);
@@ -128,6 +165,10 @@ public class VideoController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Stops an active recording
+    /// POST: api/video/stop-recording/{recordingId}
+    /// </summary>
     [HttpPost("stop-recording/{recordingId}")]
     public async Task<IActionResult> StopRecording(string recordingId)
     {
@@ -137,6 +178,8 @@ public class VideoController : ControllerBase
                 return BadRequest(new { message = "Recording ID is required" });
 
             var result = await _agoraService.StopRecordingAsync(recordingId);
+            
+            // Verify recording was stopped successfully
             if (!result)
                 return BadRequest(new { message = "Failed to stop recording" });
 
@@ -150,6 +193,10 @@ public class VideoController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Gets all sessions for a specific user
+    /// GET: api/video/user/{userId}/sessions
+    /// </summary>
     [HttpGet("user/{userId}/sessions")]
     public async Task<IActionResult> GetUserSessions(string userId)
     {
@@ -158,6 +205,7 @@ public class VideoController : ControllerBase
             if (string.IsNullOrEmpty(userId))
                 return BadRequest(new { message = "User ID is required" });
 
+            // Retrieve session history for the user
             var result = await _agoraService.GetUserSessionsAsync(userId);
             return Ok(result);
         }

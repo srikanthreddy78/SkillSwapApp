@@ -5,6 +5,11 @@ using System.Text;
 
 namespace SkillSwapAPI.Services;
 
+/// <summary>
+/// Service implementation for Agora video functionality
+/// Handles token generation, session management, and recording operations
+/// Uses Firestore for persistence
+/// </summary>
 public class AgoraService : IAgoraService
 {
     private readonly IConfiguration _configuration;
@@ -15,6 +20,7 @@ public class AgoraService : IAgoraService
     private readonly string _appId;
     private readonly string _appCertificate;
 
+    // Constructor - inject dependencies and load Agora credentials from config
     public AgoraService(
         IConfiguration configuration,
         HttpClient httpClient,
@@ -26,14 +32,20 @@ public class AgoraService : IAgoraService
         _logger = logger;
         _firestoreDb = firestoreDb;
         
+        // Load Agora credentials - throw if not configured
         _appId = _configuration["Agora:AppId"] ?? throw new InvalidOperationException("Agora AppId not configured");
         _appCertificate = _configuration["Agora:AppCertificate"] ?? throw new InvalidOperationException("Agora AppCertificate not configured");
     }
 
+    /// <summary>
+    /// Generates an RTC token for a user to join an Agora channel
+    /// Token is required for authentication in production environments
+    /// </summary>
     public async Task<AgoraTokenResponse> GenerateTokenAsync(GenerateAgoraTokenRequest request)
     {
         try
         {
+            // Generate token using our custom implementation
             var token = GenerateAgoraToken(
                 _appId,
                 _appCertificate,
@@ -42,6 +54,7 @@ public class AgoraService : IAgoraService
                 request.ExpirationSeconds ?? 3600
             );
 
+            // Return token with metadata for client
             return new AgoraTokenResponse
             {
                 Token = token,
@@ -58,15 +71,20 @@ public class AgoraService : IAgoraService
         }
     }
 
+    /// <summary>
+    /// Creates a new video session and persists to Firestore
+    /// Tracks instructor, student, and skill details for the session
+    /// </summary>
     public async Task<AgoraSessionResponse> CreateSessionAsync(CreateAgoraSessionRequest request)
     {
         try
         {
+            // Generate unique session ID
             var sessionId = Guid.NewGuid().ToString();
             
             _logger.LogInformation($"Creating session with data: ChannelName={request.ChannelName}, HostId={request.HostId}");
 
-            // ✅ Create session object with all data
+            // Build session data object with all metadata
             var sessionData = new Dictionary<string, object>
             {
                 { "sessionId", sessionId },
@@ -77,21 +95,21 @@ public class AgoraService : IAgoraService
                 { "studentName", request.StudentName },
                 { "skillName", request.SkillName },
                 { "startTime", DateTime.UtcNow },
-                { "endTime", null },
+                { "endTime", null },  // Will be set when session ends
                 { "status", "active" },
                 { "maxDuration", request.MaxDurationMinutes ?? 60 },
                 { "recordingEnabled", request.RecordingEnabled ?? false },
-                { "recordingId", null },
+                { "recordingId", null },  // Will be set if recording starts
                 { "createdAt", DateTime.UtcNow },
                 { "updatedAt", DateTime.UtcNow }
             };
 
-            // ✅ SAVE TO FIRESTORE
+            // Persist session to Firestore
             await _firestoreDb.Collection("videoSessions").Document(sessionId).SetAsync(sessionData);
 
             _logger.LogInformation($"✅ Saved session to Firestore: {sessionId} | ChannelName: {request.ChannelName}");
 
-            // ✅ Return response
+            // Return session response to caller
             return new AgoraSessionResponse
             {
                 SessionId = sessionId,
@@ -114,25 +132,31 @@ public class AgoraService : IAgoraService
         }
     }
 
+    /// <summary>
+    /// Retrieves session details from Firestore by session ID
+    /// </summary>
     public async Task<AgoraSessionResponse> GetSessionAsync(string sessionId)
     {
         try
         {
             _logger.LogInformation($"Retrieving session from Firestore: {sessionId}");
             
-            // ✅ GET FROM FIRESTORE
+            // Fetch session document from Firestore
             var snapshot = await _firestoreDb.Collection("videoSessions").Document(sessionId).GetSnapshotAsync();
             
+            // Return null if session doesn't exist
             if (!snapshot.Exists)
             {
                 _logger.LogWarning($"Session not found: {sessionId}");
                 return null;
             }
 
+            // Convert Firestore document to dictionary
             var data = snapshot.ToDictionary();
 
             _logger.LogInformation($"✅ Found session: ChannelName={data["channelName"]}, HostId={data["hostId"]}");
 
+            // Map Firestore data to response model
             return new AgoraSessionResponse
             {
                 SessionId = sessionId,
@@ -142,6 +166,7 @@ public class AgoraService : IAgoraService
                 StudentId = data["studentId"]?.ToString() ?? string.Empty,
                 StudentName = data["studentName"]?.ToString() ?? string.Empty,
                 SkillName = data["skillName"]?.ToString() ?? string.Empty,
+                // Handle Firestore Timestamp conversion
                 StartTime = (data.ContainsKey("startTime") && data["startTime"] is Timestamp ts) 
                     ? ts.ToDateTime() 
                     : DateTime.UtcNow,
@@ -157,13 +182,17 @@ public class AgoraService : IAgoraService
         }
     }
 
+    /// <summary>
+    /// Marks a session as ended in Firestore
+    /// Updates status and sets end time
+    /// </summary>
     public async Task<bool> EndSessionAsync(string sessionId)
     {
         try
         {
             _logger.LogInformation($"Ending session: {sessionId}");
             
-            // ✅ GET FROM FIRESTORE
+            // Check if session exists first
             var snapshot = await _firestoreDb.Collection("videoSessions").Document(sessionId).GetSnapshotAsync();
             
             if (!snapshot.Exists)
@@ -172,7 +201,7 @@ public class AgoraService : IAgoraService
                 return false;
             }
 
-            // ✅ UPDATE IN FIRESTORE
+            // Update session status to ended with timestamp
             await _firestoreDb.Collection("videoSessions").Document(sessionId).UpdateAsync(new Dictionary<string, object>
             {
                 { "status", "ended" },
@@ -190,15 +219,20 @@ public class AgoraService : IAgoraService
         }
     }
 
+    /// <summary>
+    /// Initiates cloud recording for a session
+    /// Creates recording record in Firestore and links to session
+    /// </summary>
     public async Task<AgoraRecordingResponse> StartRecordingAsync(StartRecordingRequest request)
     {
         try
         {
+            // Generate unique recording ID
             var recordingId = Guid.NewGuid().ToString();
             
             _logger.LogInformation($"Starting recording for session: {request.SessionId}");
 
-            // ✅ CREATE RECORDING IN FIRESTORE
+            // Create recording document in Firestore
             var recordingData = new Dictionary<string, object>
             {
                 { "recordingId", recordingId },
@@ -206,8 +240,8 @@ public class AgoraService : IAgoraService
                 { "channelName", request.ChannelName },
                 { "status", "recording" },
                 { "startTime", DateTime.UtcNow },
-                { "stopTime", null },
-                { "fileUrl", null },
+                { "stopTime", null },  // Will be set when recording stops
+                { "fileUrl", null },  // Will be populated after processing
                 { "outputFormat", request.OutputFormat },
                 { "createdAt", DateTime.UtcNow },
                 { "updatedAt", DateTime.UtcNow }
@@ -215,7 +249,7 @@ public class AgoraService : IAgoraService
 
             await _firestoreDb.Collection("videoRecordings").Document(recordingId).SetAsync(recordingData);
 
-            // ✅ ALSO UPDATE SESSION WITH RECORDING ID
+            // Also link recording ID back to the session for easy lookup
             await _firestoreDb.Collection("videoSessions").Document(request.SessionId).UpdateAsync(new Dictionary<string, object>
             {
                 { "recordingId", recordingId },
@@ -239,13 +273,17 @@ public class AgoraService : IAgoraService
         }
     }
 
+    /// <summary>
+    /// Stops an active recording
+    /// Updates recording status and sets stop time in Firestore
+    /// </summary>
     public async Task<bool> StopRecordingAsync(string recordingId)
     {
         try
         {
             _logger.LogInformation($"Stopping recording: {recordingId}");
             
-            // ✅ GET FROM FIRESTORE
+            // Verify recording exists
             var snapshot = await _firestoreDb.Collection("videoRecordings").Document(recordingId).GetSnapshotAsync();
             
             if (!snapshot.Exists)
@@ -254,7 +292,7 @@ public class AgoraService : IAgoraService
                 return false;
             }
 
-            // ✅ UPDATE IN FIRESTORE
+            // Update recording status to stopped
             await _firestoreDb.Collection("videoRecordings").Document(recordingId).UpdateAsync(new Dictionary<string, object>
             {
                 { "status", "stopped" },
@@ -272,13 +310,17 @@ public class AgoraService : IAgoraService
         }
     }
 
+    /// <summary>
+    /// Retrieves all sessions where the user is the host
+    /// Queries Firestore for sessions matching the hostId
+    /// </summary>
     public async Task<List<AgoraSessionResponse>> GetUserSessionsAsync(string userId)
     {
         try
         {
             _logger.LogInformation($"Retrieving sessions for user: {userId}");
             
-            // ✅ GET FROM FIRESTORE - query where hostId matches
+            // Query Firestore for sessions where user is the host
             var query = _firestoreDb.Collection("videoSessions")
                 .WhereEqualTo("hostId", userId);
             
@@ -286,6 +328,7 @@ public class AgoraService : IAgoraService
 
             var sessions = new List<AgoraSessionResponse>();
 
+            // Map each Firestore document to response model
             foreach (var snapshot in snapshots)
             {
                 var data = snapshot.ToDictionary();
@@ -298,6 +341,7 @@ public class AgoraService : IAgoraService
                     StudentId = data["studentId"]?.ToString() ?? string.Empty,
                     StudentName = data["studentName"]?.ToString() ?? string.Empty,
                     SkillName = data["skillName"]?.ToString() ?? string.Empty,
+                    // Convert Firestore timestamp to DateTime
                     StartTime = (data.ContainsKey("startTime") && data["startTime"] is Timestamp ts) 
                         ? ts.ToDateTime() 
                         : DateTime.UtcNow,
@@ -316,13 +360,19 @@ public class AgoraService : IAgoraService
         }
     }
 
+    /// <summary>
+    /// Generates an Agora RTC token using version 007 token format
+    /// Token provides time-limited authentication for channel access
+    /// </summary>
     private string GenerateAgoraToken(string appId, string appCertificate, string channelName, 
         uint uid, uint expirationSeconds)
     {
+        // Calculate expiration timestamp
         var expirationTimestamp = (uint)(DateTimeOffset.UtcNow.ToUnixTimeSeconds() + expirationSeconds);
         var token = new StringBuilder();
-        var tokenVersion = "007";
+        var tokenVersion = "007";  // Agora token version
         
+        // Generate signature hash
         var signature = GenerateSignature(
             appId,
             channelName,
@@ -331,23 +381,30 @@ public class AgoraService : IAgoraService
             expirationTimestamp
         );
 
+        // Build token string: version + appId + signature + expiration
         token.Append(tokenVersion);
         token.Append(appId);
         token.Append(signature);
-        token.Append(expirationTimestamp.ToString("X"));
+        token.Append(expirationTimestamp.ToString("X"));  // Hex format
 
         return token.ToString();
     }
 
+    /// <summary>
+    /// Generates HMAC-SHA256 signature for Agora token
+    /// Signs the combination of appId, channel, uid, and expiration
+    /// </summary>
     private static string GenerateSignature(string appId, string channelName, uint uid, 
         string appCertificate, uint expirationTimestamp)
     {
+        // Build content string to sign
         var content = new StringBuilder();
         content.Append(appId);
         content.Append(channelName);
         content.Append(uid);
         content.Append(expirationTimestamp);
 
+        // Generate HMAC-SHA256 hash using app certificate as key
         using (var hmacsha256 = new HMACSHA256(Encoding.UTF8.GetBytes(appCertificate)))
         {
             var hash = hmacsha256.ComputeHash(Encoding.UTF8.GetBytes(content.ToString()));
